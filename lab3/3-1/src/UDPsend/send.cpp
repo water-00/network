@@ -28,16 +28,23 @@ int len = sizeof(recvAddr);
 // 0 1--16位seq（0--低8位，1--高8位，下同）
 // 2 3--16位ack
 // 4--标志位，低三位分别代表ACK SYN FIN，第四位、第五位暂时起测试功能，代表此次发送的是文件名、文件大小
-// 5 6--数据部分长度
-// 7 8--校验和
-// 9--为了16位校验和，全0
-char header[HEADERSIZE] = {0};
+// 5--空着，全0
+// 6 7--数据部分长度
+// 8 9--校验和
+u_char header[HEADERSIZE] = {0};
 
 char dataSegment[DATASIZE] = {0}; // 报文数据部分
 
 char sendBuf[PACKETSIZE] = {0}; // header + data
 
-u_short checkSum(u_short* buf, int count) {
+u_short checkSum(const u_char* input, int length) {
+	int count = (length + 1) / 2; // 有多少组16 bits
+	u_short* buf = new u_short[count]{0};
+	for (int i = 0; i < count; i++) {
+		buf[i] = input[2 * i] + ((2 * i + 1 < length) ? input[2 * i + 1] << 8 : 0); 
+		// 最后这个三元表达式是为了避免在计算buf最后一位时，出现input[length]的越界情况
+	}
+
     register u_long sum = 0;
     while (count--) {
         sum += *buf++;
@@ -47,11 +54,13 @@ u_short checkSum(u_short* buf, int count) {
             sum++;
         }
     }
+    // delete buf
     return ~(sum & 0xFFFF);
+    return 0xFFFF;
 }
 
 bool handshake() {
-    bool shakeSuccess = false;
+    u_short checksum = 0;
 
     // 发送第一次握手请求报文
     memset(header, 0, HEADERSIZE);
@@ -61,16 +70,12 @@ bool handshake() {
     header[1] = (u_char)(seq >> 8);
     // 设置SYN位
     header[4] = 0b010; // SYN在header[4]的第二位，所以这一行表示SYN == 1
-    u_short buf[HEADERSIZE / 2] = {0};
-    int count = (HEADERSIZE + 1) / 2; // 有多少组16 bit
-    for (int i = 0; i < sizeof(buf) / 2; i++) {
-        buf[i] = header[2 * i] + header[2 * i + 1] << 8;
-    }
-    u_short checksum = checkSum(buf, count);
+    checksum = checkSum(header, HEADERSIZE);
+
     // 设置checksum位
-    header[7] = (u_char)(checksum & 0xFF);
-    header[8] = (u_char)(checksum >> 8);
-    sendto(sendSocket, header, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
+    header[8] = (u_char)(checksum & 0xFF);
+    header[9] = (u_char)(checksum >> 8);
+    sendto(sendSocket, (char*)header, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
     cout << "send the First Handshake message!" << endl;
 
     // 接受第二次握手应答报文
@@ -91,14 +96,23 @@ bool handshake() {
 
     // 发送第三次握手请求报文
     memset(header, 0, HEADERSIZE);
-    // 设置ack位，ack = seq of message 2 + 1
+    // 设置ack位，ack = seq of message2 + 1
     int ack = recvBuf[0] + (recvBuf[1] << 8) + 1;
     header[2] = ack & 0xFF;
     header[3] = ack >> 8;
     // 设置ACK位
     header[4] = 0b100;
-}
+    checksum = checkSum(header, HEADERSIZE);
+    // 设置checksum位
+    header[8] = (u_char)(checksum & 0xFF);
+    header[9] = (u_char)(checksum >> 8);
+    sendto(sendSocket, (char*)header, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
+    cout << "send the Third Handshake message!" << endl;
 
+    cout << "Handshake successfully!" << endl;
+    return true;
+
+}
 void sendfile(const char* filename) {
     // 读入文件
     ifstream is(filename, ifstream::in | ios::binary);
@@ -112,14 +126,14 @@ void sendfile(const char* filename) {
 
     // 发送文件名
     memset(sendBuf, 0, PACKETSIZE);
-    header[4] = 4;
+    header[4] = 0b1000;
     strcat((char*)memcpy(sendBuf, header, HEADERSIZE) + HEADERSIZE, filename);
 	// sendto(sendSocket, sendBuf, strlen(sendBuf), 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
     sendto(sendSocket, sendBuf, PACKETSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
 
     // 发送文件大小
     memset(sendBuf, 0, PACKETSIZE);
-    header[4] = 8;
+    header[4] = 0b10000;
     strcat((char*)memcpy(sendBuf, header, HEADERSIZE) + HEADERSIZE, to_string(fileSize).c_str());
 	// sendto(sendSocket, sendBuf, strlen(sendBuf), 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR)); strlen(sendBuf) = 0...因为sendBuf第一个字符就是0
     sendto(sendSocket, sendBuf, PACKETSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
@@ -187,7 +201,6 @@ int main() {
     sendAddr.sin_family = AF_INET;
     sendAddr.sin_port = htons(PORT);
     sendAddr.sin_addr.s_addr = inet_addr(IP);
-
 
     if (handshake()) {
         while(true) {
