@@ -31,17 +31,17 @@ int len = sizeof(recvAddr);
 // 5--空着，全0
 // 6 7--数据部分长度
 // 8 9--校验和
-u_char header[HEADERSIZE] = {0};
+char header[HEADERSIZE] = {0};
 
 char dataSegment[DATASIZE] = {0}; // 报文数据部分
 
 char sendBuf[PACKETSIZE] = {0}; // header + data
 
-u_short checkSum(const u_char* input, int length) {
+u_short checkSum(const char* input, int length) {
 	int count = (length + 1) / 2; // 有多少组16 bits
 	u_short* buf = new u_short[count]{0};
 	for (int i = 0; i < count; i++) {
-		buf[i] = input[2 * i] + ((2 * i + 1 < length) ? input[2 * i + 1] << 8 : 0); 
+		buf[i] = (u_char)input[2 * i] + ((2 * i + 1 < length) ? (u_char)input[2 * i + 1] << 8 : 0); 
 		// 最后这个三元表达式是为了避免在计算buf最后一位时，出现input[length]的越界情况
 	}
 
@@ -75,7 +75,7 @@ bool handshake() {
     // 设置checksum位
     header[8] = (u_char)(checksum & 0xFF);
     header[9] = (u_char)(checksum >> 8);
-    sendto(sendSocket, (char*)header, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
+    sendto(sendSocket, header, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
     cout << "send the First Handshake message!" << endl;
 
     // 接受第二次握手应答报文
@@ -106,7 +106,7 @@ bool handshake() {
     // 设置checksum位
     header[8] = (u_char)(checksum & 0xFF);
     header[9] = (u_char)(checksum >> 8);
-    sendto(sendSocket, (char*)header, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
+    sendto(sendSocket, header, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
     cout << "send the Third Handshake message!" << endl;
 
     cout << "Handshake successfully!" << endl;
@@ -128,21 +128,34 @@ void sendfile(const char* filename) {
     memset(sendBuf, 0, PACKETSIZE);
     header[4] = 0b1000;
     strcat((char*)memcpy(sendBuf, header, HEADERSIZE) + HEADERSIZE, filename);
-	// sendto(sendSocket, sendBuf, strlen(sendBuf), 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
     sendto(sendSocket, sendBuf, PACKETSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
 
     // 发送文件大小
     memset(sendBuf, 0, PACKETSIZE);
     header[4] = 0b10000;
     strcat((char*)memcpy(sendBuf, header, HEADERSIZE) + HEADERSIZE, to_string(fileSize).c_str());
-	// sendto(sendSocket, sendBuf, strlen(sendBuf), 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR)); strlen(sendBuf) = 0...因为sendBuf第一个字符就是0
     sendto(sendSocket, sendBuf, PACKETSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
 
-    // 发送文件
     int hasSent = 0; // 已发送的文件大小
     int sendResult = 0; // 每次sendto函数的返回结果
-    int sendSize = 0; // 每次实际发送的报文长度
+    int sendSize = 0; // 每次实际发送的报文总长度
+    int seq = 0, ack = 0; // 发送包时的seq, ack
+    int seq_opp = 0, ack_opp = 0; // 收到的对面的seq, ack
+    int dataLength = 0; // 每次实际发送的数据部分长度(= sendSize - HEADERSIZE)
+    u_short checksum = 0; // 校验和
+    bool resend = false; // 重传标志
+    char recvBuf[HEADERSIZE] = {0}; // 接受响应报文的缓冲区
+    int recvResult = 0; // 接受响应报文的返回值
+
+    // 发送文件
     while(true) {
+        if (!resend) {
+            // 如果不是重传，需要设置header
+
+        } else {
+            // 如果是重传，不需要设置header，再发一次即可
+
+        }
         // 初始化头部和数据段
         memset(header, 0, HEADERSIZE);
         memset(dataSegment, 0, DATASIZE);
@@ -151,19 +164,63 @@ void sendfile(const char* filename) {
         // 设置本次发送长度
         sendSize = min(PACKETSIZE, fileSize - hasSent + HEADERSIZE);
 
-        // file->dataSegment
+        // seq = 收到的包的ack，表示接下来要发的字节位置
+        // ack = 收到的包的seq + 收到的data length（然而receive方的data length永远为0）
+        // 设置seq位
+        seq = ack_opp;
+        header[0] = seq & 0xFF;
+        header[1] = seq >> 8;
+        // 设置ack位
+        ack = seq_opp;
+        header[2] = ack & 0xFF;
+        header[3] = ack >> 8;
+        // 设置ACK位
+        header[4] = 0b100;
+        // 设置data length位
+        dataLength = sendSize - HEADERSIZE;
+        header[6] = dataLength & 0xFF;
+        header[7] = dataLength >> 8;
+        // file中此次要被发送的数据->dataSegment
         memcpy(dataSegment, filebuf + hasSent, sendSize - HEADERSIZE);
-        
         // header->sendBuf
         memcpy(sendBuf, header, HEADERSIZE);
-
         // dataSegment->sendBuf（从sendBuf[10]开始）
         memcpy(sendBuf + HEADERSIZE, dataSegment, sendSize - HEADERSIZE);
+        // 设置checksum位
+        checksum = checkSum(sendBuf, sendSize);
+        header[8] = sendBuf[8] = checksum & 0xFF;
+        header[9] = sendBuf[9] = checksum >> 8;
 
 		sendResult = sendto(sendSocket, sendBuf, sendSize, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
+
+        // 发完packet后接受响应报文
+        while (true) {
+            // TODO: 如果超时还没收到响应报文，也break并重传
+            recvResult = recvfrom(sendSocket, recvBuf, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, &len);
+            cout << "recvResult = " << recvResult << endl;
+            // if (recvResult == SOCKET_ERROR) {
+            //     cout << "socket error! sleep!" << endl;
+            //     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            //     continue;
+            // }
+            seq_opp = (u_char)recvBuf[0] + ((u_char)recvBuf[1] << 8);
+            ack_opp = (u_char)recvBuf[2] + ((u_char)recvBuf[3] << 8);
+            cout << "seq_opp = " << seq_opp << ", ack_opp = " << ack_opp << endl;
+
+            if (recvBuf[4] == 0b100 && seq == seq_opp) { // 因为接收方没有要发送的数据，所以响应报文里的seq按传统TCP/UDP协议来说一直为0，但在我的协议里把响应报文的seq置成发送报文的seq，方便确认
+                // 对方正确收到了这个packet
+                resend = false;
+                hasSent += sendSize - HEADERSIZE;
+                cout << "send seq = " << seq << " packet successfully!" << endl;
+                break;
+            } else {
+                resend = true;
+                cout << "failed to send seq = " << seq << " packet! This packet will be resent." << endl;
+                break;
+            }
+        }
         std::this_thread::sleep_for(std::chrono::microseconds(500));
 
-        hasSent += sendSize - HEADERSIZE;
         if (hasSent == fileSize) {
             cout << "send successfully, send " << fileSize << " bytes." << endl;
             break;

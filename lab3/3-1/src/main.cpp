@@ -8,11 +8,11 @@
 
 using namespace std;
 
-u_short checkSum(u_char* input, int length) {
+u_short checkSum(char* input, int length) {
 	int count = (length + 1) / 2; // 有多少组16 bits
 	u_short* buf = new u_short[count]{0};
 	for (int i = 0; i < count; i++) {
-		buf[i] = input[2 * i] + ((2 * i + 1 < length) ? input[2 * i + 1] << 8 : 0); 
+		buf[i] = (u_char)input[2 * i] + ((2 * i + 1 < length) ? (u_char)input[2 * i + 1] << 8 : 0); 
 		// 最后这个三元表达式是为了避免在计算buf最后一位时，出现input[length]的越界情况
 	}
 
@@ -31,7 +31,7 @@ u_short checkSum(u_char* input, int length) {
 
 int main(int argc, char *argv[])
 {
-    u_char header[HEADERSIZE] = {0};
+    char header[HEADERSIZE] = {0};
     u_short checksum = 0;
     // 发送第一次握手请求报文
     memset(header, 0, HEADERSIZE);
