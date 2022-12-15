@@ -235,10 +235,10 @@ void recvfile() {
 		ofstream out;
 		out.open(filename, ios::out | ios::binary | ios::app);	
 		while (true) {
-			expectedSeq = ack + 1; // receive端唯一一个窗口
+			expectedSeq = ack + 1; // receive端唯一一个接收窗口
 
 			memset(recvBuf, 0, PACKETSIZE);
-			memset(header, 0, HEADERSIZE);
+			// memset(header, 0, HEADERSIZE);
 			recvResult = recvfrom(recvSocket, recvBuf, PACKETSIZE, 0, (SOCKADDR*)&sendAddr, &len);
 		    if (recvResult == SOCKET_ERROR) {
                 cout << "receive error! sleep!" << endl;
@@ -282,7 +282,7 @@ void recvfile() {
 				} else {
 					// 说明网络异常，丢了包，所以不用更改，直接重发收到的最新包的ack即可
 					sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
-					cout << "Don't received the expected packet successfully! Expected seq = " << expectedSeq << ". Received seq = " << seq_opp << endl;
+					cout << "Don't received the expected packet! Expected seq = " << expectedSeq << ". Received seq = " << seq_opp << endl;
 				}
 			} else {
 				// 校验和或ACK位异常，重发上一个包的ack
