@@ -150,7 +150,7 @@ bool finishSend = false; // 是否结束了一个文件的发送
 
 bool THREAD_END = false; // 通过这个变量告诉recvRespondThread退出
 int THREAD_CREAT_FLAG = 1;
-
+int index = 0; // 用于拯救receive发过来的最后一个确认包丢失，send端卡在hasSent == fileSize内的出不来的变量
 
 void timerThread() {
     while(!THREAD_END) {
@@ -176,7 +176,7 @@ void recvRespondThread() {
         if (recvBuf[FLAG_BIT_POSITION] == 0b001) {
             // 收到了挥手前让该线程退出的报文
             break;
-        } 
+        }
 
         seq_opp = (u_char)recvBuf[SEQ_BITS_START] + ((u_char)recvBuf[SEQ_BITS_START + 1] << 8)
                 + ((u_char)recvBuf[SEQ_BITS_START + 2] << 16) + ((u_char)recvBuf[SEQ_BITS_START + 3] << 24);
@@ -187,6 +187,7 @@ void recvRespondThread() {
             // 对方正确收到了这个packet
             base = ack_opp + 1;
             resend = false;
+            index = 0;
             cout << "Having received the correct ack = " << ack_opp << ", now base = " << base << endl;
 
             // 启动计时（实际上是重置计时器）
@@ -338,6 +339,9 @@ void sendfile(const char* filename) {
         if (hasSent == fileSize) {
             cout << "hasSent == fileSize, but can't finish sending..." << endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            index++;
+            if (index == 10) // 如果产生十次hasSent == fileSize且没有结束发送，说明receive端结束了接收packet和发送ack，且最后一个ack丢失了
+                finishSend = true;
         }
 
     }

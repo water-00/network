@@ -18,9 +18,9 @@ using namespace std;
 #define HEADERSIZE 14
 #define DATASIZE (PACKETSIZE-HEADERSIZE)
 #define FILE_NAME_MAX_LENGTH 64
-#define DISCARD_RATE 0.02 // 丢包率
+#define DISCARD_RATE 0.05 // 丢包率
 #define DELAY_TIME 60 // 延时时间（单位：ms）
-#define DELAY_RATE 0.1 // 发生延时的概率
+#define DELAY_RATE 0.2 // 发生延时的概率
 
 // 一些header中的标志位
 #define SEQ_BITS_START 0
@@ -214,6 +214,11 @@ void recvfile() {
 			return;
 		}
 
+		// 检查是否是文件名
+		if (recvBuf[FLAG_BIT_POSITION] != 0b1000) {
+			continue; // 因为可能会收到在send端结束发送后的还在路上的报文，过滤掉它们
+		}
+
 		// 提取header
 		memcpy(header, recvBuf, HEADERSIZE);
 		
@@ -319,6 +324,7 @@ void recvfile() {
 			if (hasReceived == filesize) {
 				cout << "receive file " << filename << " successfully! total " << hasReceived << " bytes." << endl;
 				out.close();
+				cout << "Ready to receive the next file!" << endl;
 				break;
 			}
 		}
