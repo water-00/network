@@ -293,10 +293,10 @@ void recvfile() {
 
 			if (hasReceived == filesize) {
 				cout << "receive file " << filename << " successfully! total " << hasReceived << " bytes." << endl;
+				out.close();
 				break;
 			}
 		}
-		out.close();
 	}
 }
 
