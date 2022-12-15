@@ -5,6 +5,8 @@
 #include <WS2tcpip.h>
 #include <fstream>
 #include <thread>
+#include <chrono>
+#include <random>
 
 using namespace std;
 
@@ -16,6 +18,9 @@ using namespace std;
 #define HEADERSIZE 14
 #define DATASIZE (PACKETSIZE-HEADERSIZE)
 #define FILE_NAME_MAX_LENGTH 64
+#define DISCARD_RATE 0.02 // 丢包率
+#define DELAY_TIME 60 // 延时时间（单位：ms）
+#define DELAY_RATE 0.1 // 发生延时的概率
 
 // 一些header中的标志位
 #define SEQ_BITS_START 0
@@ -189,6 +194,11 @@ void recvfile() {
 	int filesize = 0;
 	int recvResult = 0; // 接受的packet总长度
 	
+    // 用生成随机数模仿丢包率
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(0, 1);
+
 	while(true) {
 		// 接收文件名
 		recvResult = recvfrom(recvSocket, recvBuf, PACKETSIZE, 0, (SOCKADDR*)&sendAddr, &len);
@@ -278,10 +288,25 @@ void recvfile() {
 
 					hasReceived += recvResult - HEADERSIZE;		
 					cout << "has received " << hasReceived << " bytes, ack = " << ack << endl;
-				    sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
+
+					// 模拟延时
+					if (dis(gen) < DELAY_RATE)
+						std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_TIME));
+
+					// 模拟丢包
+					if (dis(gen) > DISCARD_RATE)
+				    	sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
 				} else {
-					// 说明网络异常，丢了包，所以不用更改，直接重发收到的最新包的ack即可
-					sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
+					// 说明网络异常，丢了包或者有延迟，所以不用更改，直接重发收到的最新包的ack即可
+
+					// 模拟延时
+					if (dis(gen) < DELAY_RATE)
+						std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_TIME));
+
+					// 模拟丢包
+					if (dis(gen) > DISCARD_RATE)
+				    	sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
+
 					cout << "Don't received the expected packet! Expected seq = " << expectedSeq << ". Received seq = " << seq_opp << endl;
 				}
 			} else {

@@ -19,7 +19,7 @@ using namespace std;
 #define FILE_NAME_MAX_LENGTH 64
 #define DISCARD_RATE 0.02 // 丢包率
 #define TIMEOUT 50 // 超时时间（单位：ms）
-#define TEST_STOPTIME 25 // send window 满后发送区等待的时间
+#define TEST_STOPTIME 25 // send window 满后发送区等待的时间（单位：ms）
 
 // 一些header中的标志位
 #define SEQ_BITS_START 0
@@ -145,7 +145,6 @@ u_short checksum = 0; // 校验和
 bool resend = false; // 重传标志
 char recvBuf[HEADERSIZE] = {0}; // 接受响应报文的缓冲区
 int recvResult = 0; // 接受响应报文的返回值
-bool waitingRespond = true; // 标志位，表示现在是否是在等待回复
 bool finishSend = false; // 是否结束了一个文件的发送
 // char sendWindow[PACKETSIZE * SEND_WINDOW_SIZE] = {0}; // 滑动窗口
 
@@ -176,7 +175,6 @@ void recvRespondThread() {
 
         if (recvBuf[FLAG_BIT_POSITION] == 0b001) {
             // 收到了挥手前让该线程退出的报文
-            // cout << "recvRespondThread() out!" << endl;
             break;
         } 
 
@@ -185,24 +183,17 @@ void recvRespondThread() {
         ack_opp = (u_char)recvBuf[ACK_BITS_START] + ((u_char)recvBuf[ACK_BITS_START + 1] << 8)
                 + ((u_char)recvBuf[ACK_BITS_START + 2] << 16) + ((u_char)recvBuf[ACK_BITS_START + 3] << 24);
         // cout << "Received response, seq_opp = " << seq_opp << endl;
-        if (recvBuf[FLAG_BIT_POSITION] == 0b100 && base == ack_opp) { 
+        if (recvBuf[FLAG_BIT_POSITION] == 0b100 && ack_opp >= base) { 
             // 对方正确收到了这个packet
-            base++;
-            waitingRespond = false;
+            base = ack_opp + 1;
             resend = false;
             cout << "Having received the correct ack = " << ack_opp << ", now base = " << base << endl;
 
             // 启动计时（实际上是重置计时器）
             start = clock();
         } else {
-            // 如果接受到的不是base的响应报文，需要重发send window中的packet
-            // resend = true;
+            // 如果接受到的ack < base，实际上什么也不干。不移动base，等待超时
             cout << "Received the wrong ack = " << ack_opp << ". From base = " << base << ", packets in SW need to be resent." << endl;
-            // 减去hasSent，并考虑最后一次发送的特殊情况
-            // 不能在这里减，因为要减的部分大概率是30，而不仅仅是收到错误ACK的部分
-            // cout << "dataLength = " << dataLength << ", hasSent = " << hasSent << endl;
-            // hasSent -= dataLength;
-
         }
 
         if (base == (fileSize / (PACKETSIZE - HEADERSIZE) + 2)) {
@@ -274,10 +265,9 @@ void sendfile(const char* filename) {
         }
 
         if (resend) {
-            // 如果需要重传（唯一需要重传的情况就是超时，收到错误的ACK并不会重传），则从base开始再传一遍Send Window范围内的packet
-            // std::this_thread::sleep_for(std::chrono::milliseconds(TEST_STOPTIME));
+            // 如果需要重传（唯一需要重传的情况就是超时，收到错误的ACK并不会重传），则将seq回到base
 
-            // 需要减去已经传输的数据数量，并且考虑在最后一组滑动窗口内的包出错的可能性
+            // 减去已经传输的数据数量，并且考虑在最后一组滑动窗口内的包出错的可能性
             cout << "dataLength = " << dataLength << endl;
             if (dataLength == PACKETSIZE - HEADERSIZE) {
                 hasSent -= dataLength * (seq - base);
@@ -287,66 +277,59 @@ void sendfile(const char* filename) {
                 hasSent -= (PACKETSIZE - HEADERSIZE) * (seq - base - 1);
             }
 
-            // hasSent -= (PACKETSIZE - HEADERSIZE) * (seq - base);
             seq = base;
-            
-            // cout << "pretend to resend..." << endl;
             resend = false;
             continue;
         }
         
         // 如果不需要重传，则需要首先检查滑动窗口是否满
         if (seq < base + SEND_WINDOW_SIZE) {
-            // 如果没满，则设置header
-            // seq = 即将发送的packet序号
-            // ack 不需要设置
+            if (hasSent < fileSize) {
+                // 如果没满，则设置header
+                // seq = 即将发送的packet序号
+                // ack 不需要设置
 
-            // 设置seq位
-            header[SEQ_BITS_START] = (u_char)(seq & 0xFF);
-            header[SEQ_BITS_START + 1] = (u_char)(seq >> 8);
-            header[SEQ_BITS_START + 2] = (u_char)(seq >> 16);
-            header[SEQ_BITS_START + 3] = (u_char)(seq >> 24);
-            // 设置ack位
-            // ack = seq_opp;
-            // header[ACK_BITS_START] = (u_char)(ack & 0xFF);
-            // header[ACK_BITS_START + 1] = (u_char)(ack >> 8);
-            // header[ACK_BITS_START + 2] = (u_char)(ack >> 16);
-            // header[ACK_BITS_START + 3] = (u_char)(ack >> 24);
+                // 设置seq位
+                header[SEQ_BITS_START] = (u_char)(seq & 0xFF);
+                header[SEQ_BITS_START + 1] = (u_char)(seq >> 8);
+                header[SEQ_BITS_START + 2] = (u_char)(seq >> 16);
+                header[SEQ_BITS_START + 3] = (u_char)(seq >> 24);
 
-            // 设置ACK位
-            header[FLAG_BIT_POSITION] = 0b100;
-            // 设置data length位
-            dataLength = sendSize - HEADERSIZE;
-            header[DATA_LENGTH_BITS_START] = dataLength & 0xFF;
-            header[DATA_LENGTH_BITS_START + 1] = dataLength >> 8;
+                // 设置ACK位
+                header[FLAG_BIT_POSITION] = 0b100;
 
-            // file中此次要被发送的数据->dataSegment
-            memcpy(dataSegment, filebuf + hasSent, sendSize - HEADERSIZE);
-            // header->sendBuf
-            memcpy(sendBuf, header, HEADERSIZE);
-            // dataSegment->sendBuf（从sendBuf[10]开始）
-            memcpy(sendBuf + HEADERSIZE, dataSegment, sendSize - HEADERSIZE);
-            // 设置checksum位
-            checksum = checkSum(sendBuf, sendSize);
-            header[CHECKSUM_BITS_START] = sendBuf[CHECKSUM_BITS_START] = checksum & 0xFF;
-            header[CHECKSUM_BITS_START + 1] = sendBuf[CHECKSUM_BITS_START + 1] = checksum >> 8;
+                // 设置data length位
+                dataLength = sendSize - HEADERSIZE;
+                header[DATA_LENGTH_BITS_START] = dataLength & 0xFF;
+                header[DATA_LENGTH_BITS_START + 1] = dataLength >> 8;
+
+                // file中此次要被发送的数据->dataSegment
+                memcpy(dataSegment, filebuf + hasSent, sendSize - HEADERSIZE);
+                // header->sendBuf
+                memcpy(sendBuf, header, HEADERSIZE);
+                // dataSegment->sendBuf（从sendBuf[10]开始）
+                memcpy(sendBuf + HEADERSIZE, dataSegment, sendSize - HEADERSIZE);
+                // 设置checksum位
+                checksum = checkSum(sendBuf, sendSize);
+                header[CHECKSUM_BITS_START] = sendBuf[CHECKSUM_BITS_START] = checksum & 0xFF;
+                header[CHECKSUM_BITS_START + 1] = sendBuf[CHECKSUM_BITS_START + 1] = checksum >> 8;
 
 
-            if ((hasSent < fileSize) && (dis(gen) > DISCARD_RATE))
-                sendResult = sendto(sendSocket, sendBuf, sendSize, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
+                // 模拟丢包
+                if (dis(gen) > DISCARD_RATE)
+                    sendResult = sendto(sendSocket, sendBuf, sendSize, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
 
-            // 发送完毕后，如果base = seq，说明发的是滑动窗口内的第一个packet，则启动计时
-            if (base == seq) {
-                // 启动计时器
-                start = clock();
+                // 发送完毕后，如果base = seq，说明发的是滑动窗口内的第一个packet，则启动计时
+                if (base == seq) {
+                    start = clock();
+                }
+
+                // 更新发送长度和seq
+                hasSent += sendSize - HEADERSIZE;
+                seq++;
             }
-
-            hasSent += sendSize - HEADERSIZE;
-            seq++;
-
         } else {
             // 如果不需要重传，也不能再发，就说一下send window已满，等待ack中
-            waitingRespond = true;
             cout << "Send window is full! Waiting for the response ack..." << endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(TEST_STOPTIME));
         }
@@ -355,8 +338,6 @@ void sendfile(const char* filename) {
         if (hasSent == fileSize) {
             cout << "hasSent == fileSize, but can't finish sending..." << endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-            // continue;
         }
 
     }
@@ -480,8 +461,6 @@ int main() {
                 break;
             } else {
                 s = clock();
-                // thread sendfile_thread(sendfile, str.c_str());
-                // sendfile_thread.join();
                 sendfile(str.c_str());
                 l = clock();
                 totalTime += (double)(l - s) / CLOCKS_PER_SEC;
