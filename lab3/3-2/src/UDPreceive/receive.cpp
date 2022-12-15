@@ -123,6 +123,12 @@ void wavehand() {
 	int seq, ack;
 	// 接收第一次挥手请求报文，在recvfile()中已经接收了
 
+	// 对面的recvRespondThread()线程的THREAD_END已经被置为true了，但是线程内部仍然阻塞在recvfrom()函数上
+	// 所以先随便发个有标志位的包让recvRespondThread()退出
+	header[FLAG_BIT_POSITION] = 0b001;
+	sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
+
+
 	// 发送第二次挥手应答报文
 	// 设置ack位
 	ack = (u_char)header[SEQ_BITS_START] + ((u_char)header[SEQ_BITS_START + 1] << 8) 

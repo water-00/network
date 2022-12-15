@@ -23,7 +23,7 @@ using namespace std;
 #define FLAG_BIT_POSITION 8
 #define DATA_LENGTH_BITS_START 10
 #define CHECKSUM_BITS_START 12
-#define SEND_WINDOW_SIZE 10 // 滑动窗口大小
+#define SEND_WINDOW_SIZE 30 // 滑动窗口大小
 
 WSAData wsd;
 SOCKET sendSocket = INVALID_SOCKET;
@@ -128,11 +128,74 @@ bool handshake() {
 
 }
 
+int hasSent = 0; // 已发送的文件大小
+int fileSize = 0;
+int sendResult = 0; // 每次sendto函数的返回结果
+int sendSize = 0; // 每次实际发送的报文总长度
+int seq = 1, ack = 0; // 发送包时的seq, ack
+int base = 1; // 滑动窗口起始
+int seq_opp = 0, ack_opp = 0; // 收到的对面的seq, ack
+int dataLength = 0; // 每次实际发送的数据部分长度(= sendSize - HEADERSIZE)
+u_short checksum = 0; // 校验和
+bool resend = false; // 重传标志
+char recvBuf[HEADERSIZE] = {0}; // 接受响应报文的缓冲区
+int recvResult = 0; // 接受响应报文的返回值
+bool waitingRespond = true; // 标志位，表示现在是否是在等待回复
+// char sendWindow[PACKETSIZE * SEND_WINDOW_SIZE] = {0}; // 滑动窗口
+
+bool THREAD_END = false; // 通过这个变量告诉recvRespondThread退出
+int THREAD_CREAT_FLAG = 1;
+
+
+void recvRespondThread() {
+    // 接受响应报文
+    while (!THREAD_END) {
+        // 如果超时，重新发送滑动窗口内的所有packet
+        if (false/*超时*/) {
+            for (int i = base; i < base + SEND_WINDOW_SIZE; i++) {
+                
+            }
+        }
+
+
+        recvResult = recvfrom(sendSocket, recvBuf, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, &len);
+        if (recvResult == SOCKET_ERROR) {
+            cout << "receive error! sleep!" << endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            continue;
+        }
+
+        if (recvBuf[FLAG_BIT_POSITION] == 0b001) {
+            // 收到了挥手前为了让该线程退出的空报文
+            // cout << "recvRespondThread() out!" << endl;
+            break;
+        } 
+
+        seq_opp = (u_char)recvBuf[SEQ_BITS_START] + ((u_char)recvBuf[SEQ_BITS_START + 1] << 8)
+                + ((u_char)recvBuf[SEQ_BITS_START + 2] << 16) + ((u_char)recvBuf[SEQ_BITS_START + 3] << 24);
+        ack_opp = (u_char)recvBuf[ACK_BITS_START] + ((u_char)recvBuf[ACK_BITS_START + 1] << 8)
+                + ((u_char)recvBuf[ACK_BITS_START + 2] << 16) + ((u_char)recvBuf[ACK_BITS_START + 3] << 24);
+        cout << "Received response, seq_opp = " << seq_opp << endl;
+        if (recvBuf[FLAG_BIT_POSITION] == 0b100 && base == ack_opp) { 
+            // 对方正确收到了这个packet
+            base++;
+            waitingRespond = false;
+            resend = false;
+            cout << "send seq = " << ack_opp << " packet successfully!" << endl;
+        } else {
+            // 如果接受到的不是base的响应报文，需要重发send window中的packet
+            resend = true;
+            cout << "Respond Error!" << endl;
+        }
+
+    }
+}
+
 void sendfile(const char* filename) {
     // 读入文件
     ifstream is(filename, ifstream::in | ios::binary);
     is.seekg(0, is.end);
-    int fileSize = is.tellg();
+    fileSize = is.tellg();
     is.seekg(0, is.beg);
     char* filebuf;
     filebuf = (char*)calloc(fileSize, sizeof(char));
@@ -151,19 +214,11 @@ void sendfile(const char* filename) {
     strcat((char*)memcpy(sendBuf, header, HEADERSIZE) + HEADERSIZE, to_string(fileSize).c_str());
     sendto(sendSocket, sendBuf, PACKETSIZE, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
 
-    int hasSent = 0; // 已发送的文件大小
-    int sendResult = 0; // 每次sendto函数的返回结果
-    int sendSize = 0; // 每次实际发送的报文总长度
-    int seq = 1, ack = 0; // 发送包时的seq, ack
-    int base = 1; // 滑动窗口起始
-    int seq_opp = 0, ack_opp = 0; // 收到的对面的seq, ack
-    int dataLength = 0; // 每次实际发送的数据部分长度(= sendSize - HEADERSIZE)
-    u_short checksum = 0; // 校验和
-    bool resend = false; // 重传标志
-    char recvBuf[HEADERSIZE] = {0}; // 接受响应报文的缓冲区
-    int recvResult = 0; // 接受响应报文的返回值
-    char sendWindow[PACKETSIZE * SEND_WINDOW_SIZE] = {0}; // 滑动窗口
-
+    hasSent = 0; // 已发送的文件大小
+    seq = 1, ack = 0; // 发送包时的seq, ack
+    base = 1; // 滑动窗口起始
+    seq_opp = 0, ack_opp = 0;
+    resend = false; // 重传标志
     // 发送文件
     while(true) {
         // 初始化头部和数据段
@@ -173,12 +228,21 @@ void sendfile(const char* filename) {
         // 设置本次发送长度
         sendSize = min(PACKETSIZE, fileSize - hasSent + HEADERSIZE);
 
+        // 如果THREAD_CREAT_FLAG = 1，则创建接收线程和计时线程
+        if (THREAD_CREAT_FLAG == 1) {
+            thread recvRespond(recvRespondThread);
+            recvRespond.detach();
+            THREAD_END = false;
+            THREAD_CREAT_FLAG = 0;
+        }
+
         if (!resend) {
-            // 如果不是重传，则需要首先检查滑动窗口是否满
+            // 如果不需要重传，则需要首先检查滑动窗口是否满
             if (seq < base + SEND_WINDOW_SIZE) {
                 // 如果没满，则设置header
-                // seq = 即将要发送的packet序号
+                // seq = 即将发送的packet序号
                 // ack 不需要设置
+
                 // 设置seq位
                 header[SEQ_BITS_START] = (u_char)(seq & 0xFF);
                 header[SEQ_BITS_START + 1] = (u_char)(seq >> 8);
@@ -209,61 +273,43 @@ void sendfile(const char* filename) {
                 header[CHECKSUM_BITS_START] = sendBuf[CHECKSUM_BITS_START] = checksum & 0xFF;
                 header[CHECKSUM_BITS_START + 1] = sendBuf[CHECKSUM_BITS_START + 1] = checksum >> 8;
 
-                // 把要发的在滑动窗口保存一份，用于重发
-                
-                sendResult = sendto(sendSocket, sendBuf, sendSize, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
-                // 发送完毕后，如果base = seq，说明发的是滑动窗口内的第一个packet，则启动计时
-                // ...
 
-                // 如果超时，重新发送滑动窗口内的所有packet
-                if (false) {
-                    for (int i = base; i < base + SEND_WINDOW_SIZE; i++) {
-                        
-                    }
+                sendResult = sendto(sendSocket, sendBuf, sendSize, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
+                hasSent += sendSize - HEADERSIZE;
+                seq++;
+
+                // 发送完毕后，如果base = seq，说明发的是滑动窗口内的第一个packet，则启动计时
+                // TODO...
+
+                // 发完每个packet后都要检查一下有没有发完
+                if (hasSent == fileSize) {
+                    cout << "send successfully, send " << fileSize << " bytes." << endl;
+                    totalLength += fileSize;
+                    break;
                 }
-                
+            } else {
+                // 如果不需要重传，也不能再发，就说一下send window已满，等待ack中
+                waitingRespond = true;
+                cout << "Send window is full! Waiting for the respond ack..." << endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
+
+            // 如果没有在waitingRespond，说明recvRespond线程收到消息了！赶快检查一下
+            // while (true) {
+            //     if (!waitingRespond)
+            //         break;
+            // }
+            
         } else {
             // 如果是重传，不需要设置header，再发一次即可
             sendResult = sendto(sendSocket, sendBuf, sendSize, 0, (SOCKADDR*)&recvAddr, sizeof(SOCKADDR));
         }
 
-        // 发完packet后接受响应报文
-        while (true) {
-            // TODO: 如果超时还没收到响应报文，则break并重传
-            recvResult = recvfrom(sendSocket, recvBuf, HEADERSIZE, 0, (SOCKADDR*)&recvAddr, &len);
-            if (recvResult == SOCKET_ERROR) {
-                cout << "receive error! sleep!" << endl;
-                std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-                continue;
-            }
-            seq_opp = (u_char)recvBuf[SEQ_BITS_START] + ((u_char)recvBuf[SEQ_BITS_START + 1] << 8)
-                    + ((u_char)recvBuf[SEQ_BITS_START + 2] << 16) + ((u_char)recvBuf[SEQ_BITS_START + 3] << 24);
-            ack_opp = (u_char)recvBuf[ACK_BITS_START] + ((u_char)recvBuf[ACK_BITS_START + 1] << 8)
-                    + ((u_char)recvBuf[ACK_BITS_START + 2] << 16) + ((u_char)recvBuf[ACK_BITS_START + 3] << 24);
 
-            if (recvBuf[FLAG_BIT_POSITION] == 0b100 && seq == seq_opp) { 
-                // 在我的协议里把响应报文的seq置成发送报文的seq，方便确认
-                // 对方正确收到了这个packet
-                resend = false;
-                hasSent += sendSize - HEADERSIZE;
-                cout << "send seq = " << seq << " packet successfully!" << endl;
-                break;
-            } else {
-                resend = true;
-                cout << "failed to send seq = " << seq << " packet! This packet will be resent." << endl;
-                break;
-            }
-        }
         // std::this_thread::sleep_for(std::chrono::microseconds(500));
-
-        if (hasSent == fileSize) {
-            cout << "send successfully, send " << fileSize << " bytes." << endl;
-            totalLength += fileSize;
-            break;
-        }
     }
 }
+
 
 void wavehand() {
     int seq = 0, ack = 0;
@@ -378,11 +424,13 @@ int main() {
             cout << "please input the file name(or q to quit sending): ";
             cin >> str;
             if (str == "q") {
+                THREAD_END = true;
                 break;
             } else {
                 s = clock();
-                thread sendfile_thread(sendfile, str.c_str());
-                sendfile_thread.join();
+                // thread sendfile_thread(sendfile, str.c_str());
+                // sendfile_thread.join();
+                sendfile(str.c_str());
                 l = clock();
                 totalTime += (double)(l - s) / CLOCKS_PER_SEC;
             }
