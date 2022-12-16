@@ -19,8 +19,8 @@ using namespace std;
 #define DATASIZE (PACKETSIZE-HEADERSIZE)
 #define FILE_NAME_MAX_LENGTH 64
 #define DISCARD_RATE 0.02 // 丢包率
-#define DELAY_TIME 60 // 延时时间（单位：ms）
-#define DELAY_RATE 0.1 // 发生延时的概率
+#define DELAY_TIME 110 // 延时时间（单位：ms）
+#define DELAY_RATE 0.05 // 发生延时的概率
 
 // 一些header中的标志位
 #define SEQ_BITS_START 0

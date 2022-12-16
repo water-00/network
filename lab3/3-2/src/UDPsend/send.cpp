@@ -18,8 +18,8 @@ using namespace std;
 #define DATASIZE (PACKETSIZE-HEADERSIZE)
 #define FILE_NAME_MAX_LENGTH 64
 #define DISCARD_RATE 0.02 // 丢包率
-#define TIMEOUT 50 // 超时时间（单位：ms）
-#define TEST_STOPTIME 25 // send window 满后发送区等待的时间（单位：ms）
+#define TIMEOUT 100 // 超时时间（单位：ms）
+#define TEST_STOPTIME 100 // send window 满后发送区等待的时间（单位：ms）
 
 // 一些header中的标志位
 #define SEQ_BITS_START 0
@@ -148,7 +148,7 @@ int recvResult = 0; // 接受响应报文的返回值
 bool finishSend = false; // 是否结束了一个文件的发送
 // char sendWindow[PACKETSIZE * SEND_WINDOW_SIZE] = {0}; // 滑动窗口
 
-bool THREAD_END = false; // 通过这个变量告诉recvRespondThread退出
+bool THREAD_END = false; // 通过这个变量告诉recvRespondThread和timerThread退出
 int THREAD_CREAT_FLAG = 1;
 int index = 0; // 用于拯救receive发过来的最后一个确认包丢失，send端卡在hasSent == fileSize内的出不来的变量
 
@@ -269,7 +269,6 @@ void sendfile(const char* filename) {
             // 如果需要重传（唯一需要重传的情况就是超时，收到错误的ACK并不会重传），则将seq回到base
 
             // 减去已经传输的数据数量，并且考虑在最后一组滑动窗口内的包出错的可能性
-            cout << "dataLength = " << dataLength << endl;
             if (dataLength == PACKETSIZE - HEADERSIZE) {
                 hasSent -= dataLength * (seq - base);
             } else {
