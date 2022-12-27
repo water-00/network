@@ -31,25 +31,38 @@ u_short checkSum(char* input, int length) {
 
 int main(int argc, char *argv[])
 {
-    char header[HEADERSIZE] = {0};
-    u_short checksum = 0;
-    // 发送第一次握手请求报文
-    memset(header, 0, HEADERSIZE);
-    // 设置seq位
-    u_short seq = rand() % 65535;
-    header[0] = (u_char)(seq & 0xFF);
-    header[1] = (u_char)(seq >> 8);
-    // 设置SYN位
-    header[4] = 0b010; // SYN在header[4]的第二位，所以这一行表示SYN == 1
-    checksum = checkSum(header, HEADERSIZE);
+    // char header[HEADERSIZE] = {0};
+    // u_short checksum = 0;
+    // // 发送第一次握手请求报文
+    // memset(header, 0, HEADERSIZE);
+    // // 设置seq位
+    // u_short seq = rand() % 65535;
+    // header[0] = (u_char)(seq & 0xFF);
+    // header[1] = (u_char)(seq >> 8);
+    // // 设置SYN位
+    // header[4] = 0b010; // SYN在header[4]的第二位，所以这一行表示SYN == 1
+    // checksum = checkSum(header, HEADERSIZE);
 
-    // 设置checksum位
-    header[8] = (u_char)(checksum & 0xFF);
-    header[9] = (u_char)(checksum >> 8);
+    // // 设置checksum位
+    // header[8] = (u_char)(checksum & 0xFF);
+    // header[9] = (u_char)(checksum >> 8);
 
-    (char*)header;
-    u_short s = checkSum(header, HEADERSIZE); // s应该等于0x0000
-    if (s == 0) {
-        cout << "success!" << endl;
-    }
+    // (char*)header;
+    // u_short s = checkSum(header, HEADERSIZE); // s应该等于0x0000
+    // if (s == 0) {
+    //     cout << "success!" << endl;
+    // }
+
+    char header[4] = {0};
+    int ack = 1486;
+    header[0] = (u_char)(ack & 0xFF); // 11001110
+    header[1] = (u_char)(ack >> 8); // 00000101
+    header[2] = (u_char)(ack >> 16); // 00000000
+    header[3] = (u_char)(ack >> 24); // 00000000
+
+    int ack_opp = (u_char)header[0] + ((u_char)header[1] << 8) + ((u_char)header[2] << 16) + ((u_char)header[3] << 24);
+    cout << ack_opp;
+    
+    // cout << (u_int)header[0] << endl;
+    // cout << (u_int)((u_char)header[1] << 8);
 }

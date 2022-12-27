@@ -13,9 +13,16 @@ using namespace std;
 #define PORT 15000
 #define IP "127.0.0.1"
 #define PACKETSIZE 1500
-#define HEADERSIZE 10
+#define HEADERSIZE 14
 #define DATASIZE (PACKETSIZE-HEADERSIZE)
 #define FILE_NAME_MAX_LENGTH 64
+
+// 一些header中的标志位
+#define SEQ_BITS_START 0
+#define ACK_BITS_START 4
+#define FLAG_BIT_POSITION 8
+#define DATA_LENGTH_BITS_START 10
+#define CHECKSUM_BITS_START 12
 
 WSAData wsd;
 SOCKET recvSocket = INVALID_SOCKET;
@@ -41,7 +48,6 @@ u_short checkSum(const char* input, int length) {
             sum++;
         }
     }
-	// delete buf;
     return ~(sum & 0xFFFF);
 }
 
@@ -57,9 +63,10 @@ bool handshake() {
 		// 检查checksum
 		checksum = checkSum(recvBuf, HEADERSIZE);
 		// 提取seq of message 1
-		seq = recvBuf[0] + (recvBuf[1] << 8);
+		seq = (u_char)recvBuf[SEQ_BITS_START] + ((u_char)recvBuf[SEQ_BITS_START + 1] << 8) 
+			+ ((u_char)recvBuf[SEQ_BITS_START + 2] << 16) + ((u_char)recvBuf[SEQ_BITS_START + 3] << 24);
 
-		if (checksum == 0 && recvBuf[4] == 0b010) {
+		if (checksum == 0 && recvBuf[FLAG_BIT_POSITION] == 0b010) {
 			cout << "successfully received the First Handshake message!" << endl;
 			break;
 		} else {
@@ -72,14 +79,18 @@ bool handshake() {
 	memset(header, 0, HEADERSIZE);
 	// 设置ack位，ack = seq of message 1 + 1
 	ack = seq + 1;
-	header[2] = (u_char)(ack & 0xFF);
-	header[3] = (u_char)(ack >> 8);
+	header[ACK_BITS_START] = (u_char)(ack & 0xFF);
+	header[ACK_BITS_START + 1] = (u_char)(ack >> 8);
+	header[ACK_BITS_START + 2] = (u_char)(ack >> 16);
+	header[ACK_BITS_START + 3] = (u_char)(ack >> 24);
 	// 设置seq位
 	seq = rand() % 65535;
-	header[0] = (u_char)(seq & 0xFF);
-	header[1] = (u_char)(seq >> 8);
+	header[SEQ_BITS_START] = (u_char)(seq & 0xFF);
+	header[SEQ_BITS_START + 1] = (u_char)(seq >> 8);
+	header[SEQ_BITS_START + 2] = (u_char)(seq >> 16);
+	header[SEQ_BITS_START + 3] = (u_char)(seq >> 24);
 	// 设置ACK SYN位
-	header[4] = 0b110;
+	header[FLAG_BIT_POSITION] = 0b110;
     sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
     cout << "send the Second Handshake message!" << endl;
 
@@ -90,9 +101,10 @@ bool handshake() {
 		checksum = checkSum(recvBuf, HEADERSIZE);
 		// cout << "checksum = " << checksum << endl;
 		// 提取ack of message 3
-		ack = recvBuf[2] + (recvBuf[3] << 8);
+		ack = (u_char)recvBuf[ACK_BITS_START] + ((u_char)recvBuf[ACK_BITS_START + 1] << 8) 
+			+ ((u_char)recvBuf[ACK_BITS_START + 2] << 16) + ((u_char)recvBuf[ACK_BITS_START + 3] << 24);
 
-		if (checksum == 0 && ack == seq + 1 && recvBuf[4] == 0b100) {
+		if (checksum == 0 && ack == seq + 1 && recvBuf[FLAG_BIT_POSITION] == 0b100) {
 			cout << "successfully received the Third Handshake message!" << endl;
 			break;
 		} else {
@@ -102,6 +114,66 @@ bool handshake() {
     }
 	cout << "Handshake successfully!" << endl;
     return true;
+}
+
+void wavehand() {
+	u_short checksum = 0;
+	char recvBuf[HEADERSIZE] = {0};
+    int recvResult = 0;
+	int seq, ack;
+	// 接收第一次挥手请求报文，在recvfile()中已经接收了
+
+	// 发送第二次挥手应答报文
+	// 设置ack位
+	ack = (u_char)header[SEQ_BITS_START] + ((u_char)header[SEQ_BITS_START + 1] << 8) 
+		+ ((u_char)header[SEQ_BITS_START + 2] << 16) + ((u_char)header[SEQ_BITS_START + 3] << 24) + 1;
+	header[ACK_BITS_START] = (u_char)(ack & 0xFF);
+	header[ACK_BITS_START + 1] = (u_char)(ack >> 8);
+	header[ACK_BITS_START + 2] = (u_char)(ack >> 16);
+	header[ACK_BITS_START + 3] = (u_char)(ack >> 24);
+	// 设置seq位
+	seq = rand();
+	header[SEQ_BITS_START] = (u_char)(seq & 0xFF);
+	header[SEQ_BITS_START + 1] = (u_char)(seq >> 8);
+	header[SEQ_BITS_START + 2] = (u_char)(seq >> 16);
+	header[SEQ_BITS_START + 3] = (u_char)(seq >> 24);
+	// 设置ACK位
+	header[FLAG_BIT_POSITION] = 0b100;
+    sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
+    cout << "send the Second Wavehand message!" << endl;
+
+	// 发送第三次挥手请求报文
+	// 设置seq位
+	seq = rand();
+	header[SEQ_BITS_START] = (u_char)(seq & 0xFF);
+	header[SEQ_BITS_START + 1] = (u_char)(seq >> 8);
+	header[SEQ_BITS_START + 2] = (u_char)(seq >> 16);
+	header[SEQ_BITS_START + 3] = (u_char)(seq >> 24);
+	// ack和上一个报文一样
+	// 设置ACK FIN位
+	header[FLAG_BIT_POSITION] = 0b101;
+    sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
+    cout << "send the Third Wavehand message!" << endl;
+
+	// 接收第四次挥手应答报文
+	while(true) {
+        recvResult = recvfrom(recvSocket, recvBuf, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, &len);
+		// 检查checksum
+		checksum = checkSum(recvBuf, HEADERSIZE);
+		// 提取ack of message 4
+		ack = (u_char)recvBuf[ACK_BITS_START] + ((u_char)recvBuf[ACK_BITS_START + 1] << 8) 
+			+ ((u_char)recvBuf[ACK_BITS_START + 2] << 16) + ((u_char)recvBuf[ACK_BITS_START + 3] << 24);
+		if (checksum == 0 && recvBuf[FLAG_BIT_POSITION] == 0b100) {
+			cout << "successfully received the Forth Wavehand message!" << endl;
+			break;
+		} else {
+			cout << "failed to received the correct Forth Wavehand message, Handshake failed!" << endl;
+			return;
+		}
+    }
+
+	cout << "Wavehand successfully!" << endl;
+    return;
 }
 
 void recvfile() {
@@ -114,12 +186,23 @@ void recvfile() {
 	while(true) {
 		// 接收文件名
 		recvResult = recvfrom(recvSocket, recvBuf, PACKETSIZE, 0, (SOCKADDR*)&sendAddr, &len);
+		
+		// 检查是否是挥手报文
+		if (recvBuf[FLAG_BIT_POSITION] == 0b101) {
+			// 记录一下seq
+			for (int i = 0; i < 4; i++) {
+				header[SEQ_BITS_START + i] = recvBuf[SEQ_BITS_START + i];
+			}
+			cout << "successfully received the Fisrt Wavehand message!" << endl;
+			wavehand();
+			return;
+		}
 
 		// 提取header
 		memcpy(header, recvBuf, HEADERSIZE);
 		
 		// 提取文件名
-		if (header[4] == 0b1000) {
+		if (header[FLAG_BIT_POSITION] == 0b1000) {
 			memcpy(filename, recvBuf + HEADERSIZE, FILE_NAME_MAX_LENGTH);
 		}
 
@@ -130,7 +213,7 @@ void recvfile() {
 		memcpy(header, recvBuf, HEADERSIZE);
 
 		// 提取文件大小
-		if (header[4] == 0b10000) {
+		if (header[FLAG_BIT_POSITION] == 0b10000) {
 			filesize = atoi(recvBuf + HEADERSIZE);
 		}
 		cout << "begin to receive a file, filename: " << filename << ", filesize: " << filesize << " bytes." << endl;
@@ -148,21 +231,21 @@ void recvfile() {
 			memset(recvBuf, 0, PACKETSIZE);
 			memset(header, 0, HEADERSIZE);
 			recvResult = recvfrom(recvSocket, recvBuf, PACKETSIZE, 0, (SOCKADDR*)&sendAddr, &len);
-			cout << "recvResult = " << recvResult << endl;
+		    if (recvResult == SOCKET_ERROR) {
+                cout << "receive error! sleep!" << endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+				continue;
+            }
 
-		    // if (recvResult == SOCKET_ERROR) {
-            //     cout << "socket error! sleep!" << endl;
-            //     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-			// 	continue;
-            // }
 			// 检查校验和 and ACK位
 			checksum = checkSum(recvBuf, recvResult);
-			if (checksum == 0 && recvBuf[4] == 0b100) {
-				// 检查收到的包的seq(seq_opp)是否等于ack
-				seq_opp = (u_char)recvBuf[0] + ((u_char)recvBuf[1] << 8);
-				ack_opp = (u_char)recvBuf[2] + ((u_char)recvBuf[3] << 8);
-				if (seq_opp == ack) {
-					// 收到了正确的包，那就提取内容 + 回复
+			if (checksum == 0 && recvBuf[FLAG_BIT_POSITION] == 0b100) {
+				seq_opp = (u_char)recvBuf[SEQ_BITS_START] + ((u_char)recvBuf[SEQ_BITS_START + 1] << 8) 
+						+ ((u_char)recvBuf[SEQ_BITS_START + 2] << 16) + ((u_char)recvBuf[SEQ_BITS_START + 3] << 24);
+				ack_opp = (u_char)recvBuf[ACK_BITS_START] + ((u_char)recvBuf[ACK_BITS_START + 1] << 8) 
+						+ ((u_char)recvBuf[ACK_BITS_START + 2] << 16) + ((u_char)recvBuf[ACK_BITS_START + 3] << 24);
+				if (seq_opp == ack) { // 检查收到的包的seq(即seq_opp)是否等于上一个包发过去的ack
+					// 如果收到了正确的包，那就提取内容 + 回复
 					dataLength = recvResult - HEADERSIZE;
 					// 提取数据
 					memcpy(dataSegment, recvBuf + HEADERSIZE, dataLength);
@@ -170,27 +253,33 @@ void recvfile() {
 
 					// 设置seq位，本协议中为了确认方便，就把响应报文的seq置为收到报文的seq
 					seq = seq_opp;
-					header[0] = seq & 0xFF;
-					header[1] = seq >> 8;
+					header[SEQ_BITS_START] = (u_char)(seq & 0xFF);
+					header[SEQ_BITS_START + 1] = (u_char)(seq >> 8);
+					header[SEQ_BITS_START + 2] = (u_char)(seq >> 16);
+					header[SEQ_BITS_START + 3] = (u_char)(seq >> 24);
 					// 设置ack位, = seq_opp + dataLength，表示确认接收到了这之前的全部内容，并期待收到这之后的内容
 					ack = seq_opp + dataLength;
-					header[2] = ack & 0xFF;
-					header[3] = ack >> 8;
+					header[ACK_BITS_START] = (u_char)(ack & 0xFF);
+					header[ACK_BITS_START + 1] = (u_char)(ack >> 8);
+					header[ACK_BITS_START + 2] = (u_char)(ack >> 16);
+					header[ACK_BITS_START + 3] = (u_char)(ack >> 24);
 					// 设置ACK位
-					header[4] = 0b100;
+					header[FLAG_BIT_POSITION] = 0b100;
 					// 响应报文中的data length为0，就不用设置了
-					// 设置checksum位（实际上设不设置没区别）
 
 					hasReceived += recvResult - HEADERSIZE;		
-					cout << "has received " << hasReceived << " bytes, ack = " << ack << endl;
-				    int sendReseult = sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
-					cout << "sendResult = " << sendReseult << endl;
+					// cout << "has received " << hasReceived << " bytes, ack = " << ack << endl;
+				    sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
 				} else {
+					// 说明网络异常，丢了包，所以不用更改，直接重发上一个包的ack即可
+					// TODO: 再用函数封装一下
+					sendto(recvSocket, header, HEADERSIZE, 0, (SOCKADDR*)&sendAddr, sizeof(SOCKADDR));
 					cout << "seq_opp != ack." << endl;
 				}
 			} else {
+				// 校验和或ACK位异常，重发上一个包的ack
+				// TODO: 再用函数封装一下
 				cout << "checksum ERROR or ACK ERROR!" << endl;
-				// TODO: 发一个ERROR的包回去
 				continue;
 			}
 
@@ -199,27 +288,28 @@ void recvfile() {
 				break;
 			}
 		}
+		out.close();
 	}
 }
 
 int main() {
 	if (WSAStartup(MAKEWORD(2, 2), &wsd) != 0) {
-		cout << "WSAStartup Error = " << WSAGetLastError() << endl;
+		cout << "WSAStartup error = " << WSAGetLastError() << endl;
 		exit(1);
 	}
 	else {
-		cout << "start Success" << endl;
+		cout << "start success" << endl;
 	}
 
 	recvSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (recvSocket == SOCKET_ERROR) {
-		cout << "socket Error = " << WSAGetLastError() << endl;
+		cout << "socket error = " << WSAGetLastError() << endl;
 		closesocket(recvSocket);
 		WSACleanup();
 		exit(1);
 	}
 	else {
-		cout << "socket Success" << endl;
+		cout << "socket success" << endl;
 	}
 
 	recvAddr.sin_family = AF_INET; // 协议版本
@@ -230,13 +320,13 @@ int main() {
     sendAddr.sin_addr.s_addr = inet_addr(IP);
 
 	if (bind(recvSocket, (SOCKADDR*)&recvAddr, sizeof(recvAddr)) == SOCKET_ERROR) {
-		cout << "bind Error = " << WSAGetLastError() << endl;
+		cout << "bind error = " << WSAGetLastError() << endl;
 		closesocket(recvSocket);
 		WSACleanup();
 		exit(1);
 	}
 	else {
-		cout << "bind Success" << endl;
+		cout << "bind success" << endl;
 	}
 
     if (handshake()) {
